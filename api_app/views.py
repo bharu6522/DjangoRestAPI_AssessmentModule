@@ -43,8 +43,8 @@ config.read(os.path.join(BASE_DIR, 'config.ini'))
 
 # Create your views here.
 MAX_LEVELS = int(config["CONSTANTS"]["MAX_LEVELS"])
-questions_per_level = int(config["CONSTANTS"]["QUESTIONS_PER_LEVEL"])
-questions_per_asse_type = int(config["CONSTANTS"]["QUESTIONS_PER_ASSE_TYPE"])
+# questions_per_level = int(config["CONSTANTS"]["QUESTIONS_PER_LEVEL"])
+# questions_per_asse_type = int(config["CONSTANTS"]["QUESTIONS_PER_ASSE_TYPE"])
 
 def start_exam():
     start_time = datetime.now()
@@ -55,13 +55,13 @@ def end_exam():
     return end_time
 
 def get_mongo_connection():
-    client = pymongo.MongoClient("mongodb://10.0.0.14:27017/")
+    client = pymongo.MongoClient("mongodb://ec2-3-25-125-96.ap-southeast-2.compute.amazonaws.com:27017/") #10.0.0.14
     db = client["nesplConfig"]
     # print("server_connected")
     return db
     
 @require_http_methods(["GET"])
-def get_or_create_assessment_session(request, user_name, assessment_name):
+def get_or_create_assessment_session(request, user_name, assessment_name, skill):
 
     correct_answers_for_loop = 0
     total_questions_asked=0
@@ -70,10 +70,15 @@ def get_or_create_assessment_session(request, user_name, assessment_name):
     db = get_mongo_connection()
     table_users = db["users"]
     user = table_users.find_one({'username': user_name})
-    # print(user)
+    # print('i am user', user)
+
+    table_questions = db["assessmentAndTimeDurationSuper"]
+    question_document = table_questions.find_one({"assessmentName": assessment_name, "skill": skill})
+    questions_per_asse_type = question_document['numberOfquestionForAssessment']
+    questions_per_level = questions_per_asse_type//3 
 
     candidate_checking = db["candidate_assessment_history"]
-    user_checking = candidate_checking.find_one({'username': user_name,'assessment_name':assessment_name})
+    user_checking = candidate_checking.find_one({'username': user_name,'assessmentName':assessment_name,"skill": skill})
     if user_checking:
         response_data = {'message': f"Sorry {user_name}!! You have already taken this assessment!!"}
         return JsonResponse(response_data)
@@ -83,25 +88,23 @@ def get_or_create_assessment_session(request, user_name, assessment_name):
         total_score = 0 
         try:
                     db = get_mongo_connection()
-                    collection_question = db["Testquestionans59"]
+                    collection_question = db["assessmentSuperAdmin"]
                     query = {
                         "difficulty": difficulty,
-                        "assessment": assessment_name
+                        "assessmentName": assessment_name,
+                        "skill": skill
                     }
                     document = collection_question.find_one(query)
-                    # print("i am document",document)
-                    # print("i am qid", document["qno"])
-                    # print("i am que_txt", document["que"])
                     opt = [document['que'][f'option{i}'] for i in range(1, 5)]
                     # print("i am optinos",opt)
                     current_question = document['que']
                     serial_no = document["qno"]
-                    total_questions_asked = total_questions_asked+1
+                    total_questions_asked = total_questions_asked + 1
                     start_time = start_exam()
                     response_data = {
                         'message': f"Question {total_questions_asked}:",
                         "start_time": start_time,
-                        # 'difficulty': difficulty,
+                        'difficulty': difficulty,
                         'qid': serial_no,
                         'question_data': current_question['que'],
                         'options': [current_question[f'option{i}'] for i in range(1, 5)]
@@ -109,17 +112,14 @@ def get_or_create_assessment_session(request, user_name, assessment_name):
                     
                     
                     collection_traking = db["bj_history"]
-                    existing_document = collection_traking.find_one({"user_name": user_name, "assessment_name": assessment_name})
+                    existing_document = collection_traking.find_one({"user_name": user_name, "assessment_name": assessment_name, "skill": skill})
                     
                     if existing_document:
                             # Update existing document
                             collection_traking.update(
-                                {"user_name": user_name, "assessment_name": assessment_name},
+                                {"user_name": user_name, "assessment_name": assessment_name, "skill": skill},
                                 {
                                     "$push": {
-                                        # "asked_question": {
-                                        #     "sno": current_question["qno"],
-                                        # },
                                         "question_list":[serial_no]
                                     },
                                     "$set": {
@@ -133,6 +133,7 @@ def get_or_create_assessment_session(request, user_name, assessment_name):
                                 "_id": ObjectId(),
                                 "user_name": user_name,
                                 "assessment_name": assessment_name,
+                                "skill": skill,
                                 "start_time": start_time,
                                 "total_score": total_score,
                                 "correct_answers_for_loop": correct_answers_for_loop,
@@ -140,13 +141,6 @@ def get_or_create_assessment_session(request, user_name, assessment_name):
                                 "next_difficulty_level": next_difficulty_level,
                                 # "end_time": end_time,
                                 "question_list":[serial_no],
-                                # "asked_question": [
-                                #     {
-                                #         "sno": current_question["qno"],
-                                #         # "user_answer": is_correct,
-                                #         # "assessment_date": datetime.now()
-                                #     }
-                                # ]
                             }
                             collection_traking.insert_one(assessment_document)
 
@@ -155,6 +149,7 @@ def get_or_create_assessment_session(request, user_name, assessment_name):
                                             "username": user_name,
                                             "assessment_name": assessment_name,
                                             "start_time": start_time,
+                                            "skill" : skill
                                         }
                     score_save_table.insert_one(save_document)
                     
@@ -167,13 +162,20 @@ def get_or_create_assessment_session(request, user_name, assessment_name):
             return JsonResponse({"message": "Username does not exist!"}, safe=False)
    
 
-def get_answer(request,user_name,assessment_name,user_answers,operation,serial_no):
+def get_answer(request,user_name,assessment_name,skill,user_answers,operation,serial_no):
      
     end_time = end_exam()
     user_answers = user_answers.split(',')
     db = get_mongo_connection()
-    collection_question = db["Testquestionans59"]
+    collection_question = db["assessmentSuperAdmin"]
     collection_traking = db["bj_history"]
+
+    table_questions = db["assessmentAndTimeDurationSuper"]
+    question_document = table_questions.find_one({"assessmentName": assessment_name, "skill": skill})
+    questions_per_asse_type = question_document['numberOfquestionForAssessment']
+    questions_per_level = questions_per_asse_type//3 
+
+
     query = {"qno": serial_no}
     document = collection_question.find_one(query)
     question = document['que']
@@ -181,11 +183,11 @@ def get_answer(request,user_name,assessment_name,user_answers,operation,serial_n
     correct_answers_set = set(str(i + 1) for i, ans in enumerate(correct_answers) if ans.lower() == 'true')
     # print("we are correct answers set :",correct_answers_set)
     is_correct = (set(user_answers) == correct_answers_set)
-    next_difficulty_level = (collection_traking.find_one({"user_name":user_name,"assessment_name":assessment_name})).get("next_difficulty_level")
-    asked_questions_list = (collection_traking.find_one({"user_name":user_name,"assessment_name":assessment_name})).get("question_list")
-    correct_answers_for_loop = (collection_traking.find_one({"user_name":user_name,"assessment_name":assessment_name})).get("correct_answers_for_loop")
-    total_questions_asked = (collection_traking.find_one({"user_name":user_name,"assessment_name":assessment_name})).get("total_questions_asked")
-    total_score = (collection_traking.find_one({"user_name":user_name,"assessment_name":assessment_name})).get("total_score")
+    next_difficulty_level = (collection_traking.find_one({"user_name":user_name,"assessment_name":assessment_name,"skill": skill})).get("next_difficulty_level")
+    asked_questions_list = (collection_traking.find_one({"user_name":user_name,"assessment_name":assessment_name,"skill": skill})).get("question_list")
+    correct_answers_for_loop = (collection_traking.find_one({"user_name":user_name,"assessment_name":assessment_name,"skill": skill})).get("correct_answers_for_loop")
+    total_questions_asked = (collection_traking.find_one({"user_name":user_name,"assessment_name":assessment_name,"skill": skill})).get("total_questions_asked")
+    total_score = (collection_traking.find_one({"user_name":user_name,"assessment_name":assessment_name,"skill": skill})).get("total_score")
     
     if operation =="Start":
         current_difficulty = 1
@@ -226,12 +228,12 @@ def get_answer(request,user_name,assessment_name,user_answers,operation,serial_n
                                     next_difficulty_level = 1 
                                     # questions = question_easy
 
-                    existing_document = collection_traking.find_one({"user_name": user_name, "assessment_name": assessment_name})
+                    existing_document = collection_traking.find_one({"user_name": user_name, "assessmentName": assessment_name, "skill": skill})
                     
                     if existing_document:
                         # Update existing document
                         collection_traking.update(
-                            {"user_name": user_name, "assessment_name": assessment_name},
+                            {"user_name": user_name, "assessment_name": assessment_name,"skill": skill},
                             {
                                 "$push": {
                                     "asked_question": {
@@ -254,6 +256,7 @@ def get_answer(request,user_name,assessment_name,user_answers,operation,serial_n
                             "_id": ObjectId(),
                             "user_name": user_name,
                             "assessment_name": assessment_name,
+                            "skill": skill ,
                             # "start_time": start_time,
                             "end_time": end_time,
                             "correct_answers_for_loop": correct_answers_for_loop,
@@ -303,12 +306,12 @@ def get_answer(request,user_name,assessment_name,user_answers,operation,serial_n
                                     next_difficulty_level = 1
                                     # questions = question_easy
                     
-                    existing_document = collection_traking.find_one({"user_name": user_name, "assessment_name": assessment_name})
+                    existing_document = collection_traking.find_one({"user_name": user_name, "assessment_name": assessment_name, "skill": skill})
                    
                     if existing_document:
                         # Update existing document
                         collection_traking.update(
-                            {"user_name": user_name, "assessment_name": assessment_name},
+                            {"user_name": user_name, "assessment_name": assessment_name, "skill": skill},
                             {
                                 "$push": {
                                     "asked_question": {
@@ -331,6 +334,7 @@ def get_answer(request,user_name,assessment_name,user_answers,operation,serial_n
                             "_id": ObjectId(),
                             "user_name": user_name,
                             "assessment_name": assessment_name,
+                            "skill": skill ,
                             # "start_time": start_time,
                             "end_time": end_time,
                             "correct_answers_for_loop": correct_answers_for_loop,
@@ -392,11 +396,11 @@ def get_answer(request,user_name,assessment_name,user_answers,operation,serial_n
                                     next_difficulty_level = 1 
                                     # questions = question_easy
 
-                    existing_document = collection_traking.find_one({"user_name": user_name, "assessment_name": assessment_name})
+                    existing_document = collection_traking.find_one({"user_name": user_name, "assessment_name": assessment_name, "skill": skill})
                     if existing_document:
                         # Update existing document
                         collection_traking.update(
-                            {"user_name": user_name, "assessment_name": assessment_name},
+                            {"user_name": user_name, "assessment_name": assessment_name, "skill": skill},
                             {
                                 "$push": {
                                     "asked_question": {
@@ -419,6 +423,7 @@ def get_answer(request,user_name,assessment_name,user_answers,operation,serial_n
                             "_id": ObjectId(),
                             "user_name": user_name,
                             "assessment_name": assessment_name,
+                            "skill": skill , 
                             # "start_time": start_time,
                             "end_time": end_time,
                             "correct_answers_for_loop": correct_answers_for_loop,
@@ -468,12 +473,12 @@ def get_answer(request,user_name,assessment_name,user_answers,operation,serial_n
                                     next_difficulty_level = 1
                                     # questions = question_easy
                     
-                    existing_document = collection_traking.find_one({"user_name": user_name, "assessment_name": assessment_name})
+                    existing_document = collection_traking.find_one({"user_name": user_name, "assessment_name": assessment_name, "skill": skill})
                    
                     if existing_document:
                         # Update existing document
                         collection_traking.update(
-                            {"user_name": user_name, "assessment_name": assessment_name},
+                            {"user_name": user_name, "assessment_name": assessment_name, "skill": skill},
                             {
                                 "$push": {
                                     "asked_question": {
@@ -496,6 +501,7 @@ def get_answer(request,user_name,assessment_name,user_answers,operation,serial_n
                             "_id": ObjectId(),
                             "user_name": user_name,
                             "assessment_name": assessment_name,
+                            "skill": skill, 
                             # "start_time": start_time,
                             "end_time": end_time,
                             "correct_answers_for_loop": correct_answers_for_loop,
@@ -511,43 +517,45 @@ def get_answer(request,user_name,assessment_name,user_answers,operation,serial_n
                         }
                         collection_traking.insert_one(assessment_document)
 
-                    
-                if total_questions_asked == questions_per_level:
-                        max_score = int(config["CONSTANTS"]["MAX_SCORE"])
-                        grade = ''
-                        if (total_score >= int((85/100)*(max_score))):
-                            grade = 'A+'
-                        elif (total_score >= int((75/100)*(max_score))) and (total_score <= int((85/100)*(max_score))):
-                            grade = 'A'
-                        elif (total_score >= int((60/100)*(max_score))) and (total_score <= int((75/100)*(max_score))):
-                            grade = 'B'
-                        elif (total_score < int((60/100)*(max_score))):
-                            grade = 'C'
 
-                        db = get_mongo_connection()
-                        score_save_table = db['candidate_assessment_history']
-                        query_score = {"username": user_name,
-                                        "assessment_name": assessment_name}
-                        update_query = {"$set":{
-                                            "end_time": end_time,
-                                            "score" : total_score,
-                                            "grade" : grade
-                        }}
-                        # save_document = {
-                        #                     "_id": ObjectId(),
-                        #                     "username": user_name,
-                        #                     "assessment_name": assessment_name,
-                        #                     # "start_time": start_time,
-                                            
-                        #                 }
-                       
-                        score_save_table.update_one(query_score,update_query)
-                        response_data = {'message': f"Thank you for your precious time {user_name}!! We will get back to you soon. "}
-                        return JsonResponse(response_data)
-                     
-        
-            else:
-                return HttpResponse("Please select the correct options ")     # print("Invalid input. Please enter a number between 1 and 4.\n")
+                if total_questions_asked == questions_per_level: # questions_per_level
+                    assessmentResponseType = "Finished"
+                elif 1 < total_questions_asked < questions_per_level:
+                    assessmentResponseType = "Pursuing"
+                else:
+                    assessmentResponseType = "Recommended"
+
+                # max_score = int(config["CONSTANTS"]["MAX_SCORE"])
+                max_score = (MAX_LEVELS*1)+(MAX_LEVELS*3)+(questions_per_level)*5
+                
+                grade = ''
+                if total_score >= int(0.85 * max_score):
+                    grade = 'A+'
+                elif total_score >= int(0.75 * max_score):
+                    grade = 'A'
+                elif total_score >= int(0.60 * max_score):
+                    grade = 'B'
+                elif (total_score < int((60/100)*(max_score))):
+                    grade = 'C'
+
+                db = get_mongo_connection()
+                score_save_table = db['candidate_assessment_history']
+                query_score = {"username": user_name, "assessment_name": assessment_name, "skill": skill}
+                update_query = {"$set": {
+                    "end_time": end_time,
+                    "score": total_score,
+                    "grade": grade,
+                    "nespl_assessment_submited": "yes" if total_questions_asked == questions_per_level else "No",
+                    "assessmentResponseType": assessmentResponseType
+                }}
+
+                score_save_table.update_one(query_score, update_query)
+
+                if total_questions_asked == questions_per_level:
+                    response_data = {'message': f"Your assessment has been successfully completed. You can view your score on the dashboard."}
+                    return JsonResponse(response_data)
+                # else:
+                #     return HttpResponse("Please select the correct options ")
 
         except Question.DoesNotExist:
                 return Response({"error": "Question not found"}, status=404)
@@ -561,16 +569,16 @@ def get_answer(request,user_name,assessment_name,user_answers,operation,serial_n
     else :
          difficulty = "Easy"   
     
-    asked_questions_list = (collection_traking.find_one({"user_name":user_name,"assessment_name":assessment_name})).get("question_list")
-    correct_answers_for_loop = (collection_traking.find_one({"user_name":user_name,"assessment_name":assessment_name})).get("correct_answers_for_loop")
-    total_questions_asked = (collection_traking.find_one({"user_name":user_name,"assessment_name":assessment_name})).get("total_questions_asked")
-    total_score = (collection_traking.find_one({"user_name":user_name,"assessment_name":assessment_name})).get("total_score")   
+    asked_questions_list = (collection_traking.find_one({"user_name":user_name,"assessment_name":assessment_name,"skill":skill})).get("question_list")
+    correct_answers_for_loop = (collection_traking.find_one({"user_name":user_name,"assessment_name":assessment_name,"skill":skill})).get("correct_answers_for_loop")
+    total_questions_asked = (collection_traking.find_one({"user_name":user_name,"assessment_name":assessment_name,"skill":skill})).get("total_questions_asked")
+    total_score = (collection_traking.find_one({"user_name":user_name,"assessment_name":assessment_name,"skill":skill})).get("total_score")   
 
     db = get_mongo_connection()
-    collection_question = db["Testquestionans59"]
+    collection_question = db["assessmentSuperAdmin"]
     query = {
                         "difficulty": difficulty,
-                        "assessment": assessment_name,
+                        "assessmentName": assessment_name,
                         "qno":{"$nin": asked_questions_list}
                     }
         # document = collection_question.find_one(query)
@@ -586,18 +594,18 @@ def get_answer(request,user_name,assessment_name,user_answers,operation,serial_n
     total_questions_asked = total_questions_asked + 1
     response_data = {
                         'message': f"Question {total_questions_asked}:",
-                        # 'difficulty': difficulty,
+                        'difficulty': difficulty,
                         'qid': serial_no,
                         'question_data': current_question['que'],
                         'options': [current_question[f'option{i}'] for i in range(1, 5)]
                     }
     
-    existing_document = collection_traking.find_one({"user_name": user_name, "assessment_name": assessment_name})
+    existing_document = collection_traking.find_one({"user_name": user_name, "assessment_name": assessment_name,"skill": skill})
     
     start_time = start_exam()
     if existing_document:
         collection_traking.update(
-                                {"user_name": user_name, "assessment_name": assessment_name},
+                                {"user_name": user_name, "assessment_name": assessment_name,"skill": skill},
                                 {
                                     "$push": {
                                         # "asked_question": {
@@ -620,6 +628,7 @@ def get_answer(request,user_name,assessment_name,user_answers,operation,serial_n
                                 "_id": ObjectId(),
                                 "user_name": user_name,
                                 "assessment_name": assessment_name,
+                                "skill": skill, 
                                 "start_time": start_time,
                                 "total_score": total_score,
                                 "correct_answers_for_loop": correct_answers_for_loop,
@@ -636,14 +645,13 @@ def get_answer(request,user_name,assessment_name,user_answers,operation,serial_n
                                 # ]
                             }
         collection_traking.insert_one(assessment_document)
-
     
     return JsonResponse(response_data)
     
 
 
 @require_http_methods(["GET"])
-def industry_get_or_create_assessment_session(request, industry_name, user_name, assessment_name):
+def industry_get_or_create_assessment_session(request, industry_name, user_name, assessment_name,skill):
 
     correct_answers_for_loop = 0
     total_questions_asked=0
@@ -652,28 +660,37 @@ def industry_get_or_create_assessment_session(request, industry_name, user_name,
     db = get_mongo_connection()
     table_users = db["users"]
 
+    table_questions = db["assessmentAndTimeDuration"]
+    question_document = table_questions.find_one({"assessmentName": assessment_name, "skill": skill})
+    questions_per_asse_type = question_document['numberOfquestionForAssessment']
+    questions_per_level = questions_per_asse_type//3 
+
+    # print("hello")
     candidate_checking = db["industry_candidate_assessment_history"]
-    user_checking = candidate_checking.find_one({'username': user_name,'assessment':assessment_name,'industry_name':industry_name})
+    user_checking = candidate_checking.find_one({'username': user_name,'assessment_name':assessment_name,'industry':industry_name,"skill": skill}) 
+    grade = ''
     if user_checking:
         response_data = {'message': f"Sorry {user_name}!! You have already taken this assessment!!"}
         return JsonResponse(response_data)
         
-    user = table_users.find_one({'username': user_name,'name':industry_name})
+    user = table_users.find_one({'username': user_name}) # ,'name':industry_name
     # print(user)
     if user:  
         difficulty = "Easy"  
         total_score = 0 
         try:
                     db = get_mongo_connection()
-                    collection_question = db["industry_questionans"]
+                    # print('i am db', db)
+                    collection_question = db["industry_assessment"]
                     query = {
                         "difficulty": difficulty,
-                        "assessment": assessment_name,
-                        "industry_name": industry_name
+                        "assessmentName": assessment_name, # assessment - > assessmentName 
+                        "industry": industry_name,
+                        "skill":skill
                     }
                     document = collection_question.find_one(query)
-
-                    # print(" i am document",document)
+                    if document is None:
+                        return JsonResponse({"message": "No questions found for the specified assessment."}, status=404)
                     
                     opt = [document['que'][f'option{i}'] for i in range(1, 5)]
                     # print("i am optinos",opt)
@@ -685,21 +702,21 @@ def industry_get_or_create_assessment_session(request, industry_name, user_name,
                     response_data = {
                         'message': f"Question {total_questions_asked}:",
                         "start_time": start_time,
-                        # 'difficulty': difficulty,
+                        'difficulty': difficulty,
                         'qid': serial_no,
                         'question_data': current_question['que'],
                         'options': [current_question[f'option{i}'] for i in range(1, 5)]
                     }
                     
-                    print(response_data)
+                    # print(response_data)
 
                     collection_traking = db["industry_bj_history"]
-                    existing_document = collection_traking.find_one({"industry_name": industry_name,"user_name": user_name, "assessment_name": assessment_name})
+                    existing_document = collection_traking.find_one({"industry": industry_name,"user_name": user_name, "assessment_name": assessment_name,"skill": skill}) # skill added 
                     
                     if existing_document:
                             # Update existing document
                             collection_traking.update(
-                                {"industry_name": industry_name,"user_name": user_name, "assessment_name": assessment_name},
+                                {"industry": industry_name,"user_name": user_name, "assessment_name": assessment_name,"skill": skill},
                                 {
                                     "$push": {
                                         
@@ -716,7 +733,8 @@ def industry_get_or_create_assessment_session(request, industry_name, user_name,
                                 "_id": ObjectId(),
                                 "user_name": user_name,
                                 "assessment_name": assessment_name,
-                                "industry_name": industry_name,
+                                "industry": industry_name,
+                                "skill": skill, 
                                 "start_time": start_time,
                                 "total_score": total_score,
                                 "correct_answers_for_loop": correct_answers_for_loop,
@@ -732,8 +750,10 @@ def industry_get_or_create_assessment_session(request, industry_name, user_name,
                     save_document = { 
                                             "username": user_name,
                                             "assessment_name": assessment_name,
-                                            "industry_name": industry_name, 
+                                            "industry": industry_name, 
+                                            "skill": skill, 
                                             "start_time": start_time,
+                                            "skill" : skill
                                         }
                     score_save_table.insert_one(save_document)
                     
@@ -747,13 +767,20 @@ def industry_get_or_create_assessment_session(request, industry_name, user_name,
    
 
 
-def industry_get_answer(request,industry_name,user_name,assessment_name,user_answers,operation,serial_no):
+def industry_get_answer(request,industry_name,user_name,assessment_name,skill,user_answers,operation,serial_no):
      
     end_time = end_exam()
     user_answers = user_answers.split(',')
     db = get_mongo_connection()
-    collection_question = db["industry_questionans"]
+    
+    collection_question = db["industry_assessment"] # industry_questionans -> industry_assessment
     collection_traking = db["industry_bj_history"]
+
+    table_questions = db["assessmentAndTimeDuration"]
+    question_document = table_questions.find_one({"assessmentName": assessment_name, "skill": skill})
+    questions_per_asse_type = question_document['numberOfquestionForAssessment']
+    questions_per_level = questions_per_asse_type//3 
+    
     query = {"qno": serial_no}
     document = collection_question.find_one(query)
     question = document['que']
@@ -761,12 +788,12 @@ def industry_get_answer(request,industry_name,user_name,assessment_name,user_ans
     correct_answers_set = set(str(i + 1) for i, ans in enumerate(correct_answers) if ans.lower() == 'true')
     # print("we are correct answers set :",correct_answers_set)
     is_correct = (set(user_answers) == correct_answers_set)
-    next_difficulty_level = (collection_traking.find_one({"industry_name": industry_name,"user_name":user_name,"assessment_name":assessment_name})).get("next_difficulty_level")
-    asked_questions_list = (collection_traking.find_one({"industry_name": industry_name,"user_name":user_name,"assessment_name":assessment_name})).get("question_list")
-    correct_answers_for_loop = (collection_traking.find_one({"industry_name": industry_name,"user_name":user_name,"assessment_name":assessment_name})).get("correct_answers_for_loop")
-    total_questions_asked = (collection_traking.find_one({"industry_name": industry_name,"user_name":user_name,"assessment_name":assessment_name})).get("total_questions_asked")
-    total_score = (collection_traking.find_one({"industry_name": industry_name,"user_name":user_name,"assessment_name":assessment_name})).get("total_score")
-    
+    next_difficulty_level = (collection_traking.find_one({"industry": industry_name,"user_name":user_name,"assessment_name":assessment_name,"skill": skill})).get("next_difficulty_level")
+    asked_questions_list = (collection_traking.find_one({"industry": industry_name,"user_name":user_name,"assessment_name":assessment_name,"skill": skill})).get("question_list")
+    correct_answers_for_loop = (collection_traking.find_one({"industry": industry_name,"user_name":user_name,"assessment_name":assessment_name,"skill": skill})).get("correct_answers_for_loop")
+    total_questions_asked = (collection_traking.find_one({"industry": industry_name,"user_name":user_name,"assessment_name":assessment_name,"skill": skill})).get("total_questions_asked")
+    total_score = (collection_traking.find_one({"industry": industry_name,"user_name":user_name,"assessment_name":assessment_name,"skill": skill})).get("total_score")
+    grade = ''
     if operation =="Start":
         current_difficulty = 1
         try:
@@ -806,19 +833,19 @@ def industry_get_answer(request,industry_name,user_name,assessment_name,user_ans
                                     next_difficulty_level = 1 
                                     # questions = question_easy
 
-                    existing_document = collection_traking.find_one({"industry_name": industry_name,"user_name": user_name, "assessment_name": assessment_name})
+                    existing_document = collection_traking.find_one({"industry": industry_name,"user_name": user_name, "assessment_name": assessment_name,"skill": skill})
                     
                     if existing_document:
                         # Update existing document
                         collection_traking.update(
-                            {"industry_name": industry_name,"user_name": user_name, "assessment_name": assessment_name},
+                            {"industry": industry_name,"user_name": user_name, "assessment_name": assessment_name, "skill": skill},
                             {
                                 "$push": {
                                     "asked_question": {
                                         "question": question["qno"],
                                         "user_answer": is_correct,
                                         "assessment_date": datetime.now(),
-                                        "industry_name": industry_name
+                                        "industry": industry_name
                                     }
                                 },
                                 "$set": {
@@ -835,7 +862,8 @@ def industry_get_answer(request,industry_name,user_name,assessment_name,user_ans
                             "_id": ObjectId(),
                             "user_name": user_name,
                             "assessment_name": assessment_name,
-                            "industry_name": industry_name,
+                            "industry": industry_name,
+                            "skill": skill, 
                             # "start_time": start_time,
                             "end_time": end_time,
                             "correct_answers_for_loop": correct_answers_for_loop,
@@ -885,19 +913,19 @@ def industry_get_answer(request,industry_name,user_name,assessment_name,user_ans
                                     next_difficulty_level = 1
                                     # questions = question_easy
                     
-                    existing_document = collection_traking.find_one({"industry_name": industry_name,"user_name": user_name, "assessment_name": assessment_name})
+                    existing_document = collection_traking.find_one({"industry": industry_name,"user_name": user_name, "assessment_name": assessment_name,"skill": skill})
                    
                     if existing_document:
                         # Update existing document
                         collection_traking.update(
-                            {"industry_name": industry_name,"user_name": user_name, "assessment_name": assessment_name},
+                            {"industry": industry_name,"user_name": user_name, "assessment_name": assessment_name, "skill": skill},
                             {
                                 "$push": {
                                     "asked_question": {
                                         "question": question["qno"],
                                         "user_answer": is_correct,
                                         "assessment_date": datetime.now(),
-                                        "industry_name": industry_name
+                                        "industry": industry_name
                                     }
                                 },
                                 "$set": {
@@ -914,7 +942,8 @@ def industry_get_answer(request,industry_name,user_name,assessment_name,user_ans
                             "_id": ObjectId(),
                             "user_name": user_name,
                             "assessment_name": assessment_name,
-                            "industry_name": industry_name,
+                            "industry": industry_name,
+                            "skill": skill, 
                             # "start_time": start_time,
                             "end_time": end_time,
                             "correct_answers_for_loop": correct_answers_for_loop,
@@ -976,11 +1005,11 @@ def industry_get_answer(request,industry_name,user_name,assessment_name,user_ans
                                     next_difficulty_level = 1 
                                     # questions = question_easy
 
-                    existing_document = collection_traking.find_one({"user_name": user_name, "assessment_name": assessment_name})
+                    existing_document = collection_traking.find_one({"user_name": user_name, "assessment_name": assessment_name,"skill": skill,"industry": industry_name})
                     if existing_document:
                         # Update existing document
                         collection_traking.update(
-                            {"industry_name": industry_name,"user_name": user_name, "assessment_name": assessment_name},
+                            {"industry": industry_name,"user_name": user_name, "assessment_name": assessment_name,"skill": skill,"industry": industry_name},
                             {
                                 "$push": {
                                     "asked_question": {
@@ -1003,7 +1032,8 @@ def industry_get_answer(request,industry_name,user_name,assessment_name,user_ans
                             "_id": ObjectId(),
                             "user_name": user_name,
                             "assessment_name": assessment_name,
-                            "industry_name": industry_name,
+                            "industry": industry_name,
+                            "skill": skill,
                             # "start_time": start_time,
                             "end_time": end_time,
                             "correct_answers_for_loop": correct_answers_for_loop,
@@ -1053,12 +1083,12 @@ def industry_get_answer(request,industry_name,user_name,assessment_name,user_ans
                                     next_difficulty_level = 1
                                     # questions = question_easy
                     
-                    existing_document = collection_traking.find_one({"industry_name": industry_name,"user_name": user_name, "assessment_name": assessment_name})
+                    existing_document = collection_traking.find_one({"industry": industry_name,"user_name": user_name, "assessment_name": assessment_name,"skill": skill})
                    
                     if existing_document:
                         # Update existing document
                         collection_traking.update(
-                            {"industry_name": industry_name,"user_name": user_name, "assessment_name": assessment_name},
+                            {"industry": industry_name,"user_name": user_name, "assessment_name": assessment_name,"skill": skill},
                             {
                                 "$push": {
                                     "asked_question": {
@@ -1081,7 +1111,8 @@ def industry_get_answer(request,industry_name,user_name,assessment_name,user_ans
                             "_id": ObjectId(),
                             "user_name": user_name,
                             "assessment_name": assessment_name,
-                            "industry_name": industry_name,
+                            "industry": industry_name,
+                            "skill": skill, 
                             # "start_time": start_time,
                             "end_time": end_time,
                             "correct_answers_for_loop": correct_answers_for_loop,
@@ -1097,10 +1128,16 @@ def industry_get_answer(request,industry_name,user_name,assessment_name,user_ans
                         }
                         collection_traking.insert_one(assessment_document)
 
-                    
                 if total_questions_asked == questions_per_level:
-                        max_score = int(config["CONSTANTS"]["MAX_SCORE"])
-                        grade = ''
+                    assessmentResponseType = "Finished"
+                elif 1 < total_questions_asked < questions_per_level:
+                    assessmentResponseType = "Pursuing"
+                else:
+                    assessmentResponseType = "Recommended"
+                    
+                if total_questions_asked == questions_per_level: #questions_per_level
+                        # max_score = int(config["CONSTANTS"]["MAX_SCORE"])
+                        max_score = (3*1)+(3*3)+(questions_per_level-6)*5 
                         if (total_score >= int((85/100)*(max_score))):
                             grade = 'A+'
                         elif (total_score >= int((75/100)*(max_score))) and (total_score <= int((85/100)*(max_score))):
@@ -1110,21 +1147,25 @@ def industry_get_answer(request,industry_name,user_name,assessment_name,user_ans
                         elif (total_score < int((60/100)*(max_score))):
                             grade = 'C'
 
-                        db = get_mongo_connection()
-                        score_save_table = db['industry_candidate_assessment_history']
-                        query_score = {"industry_name": industry_name,"username": user_name,
-                                        "assessment_name": assessment_name}
-                        update_query = {"$set":{
+                db = get_mongo_connection()
+                score_save_table = db['industry_candidate_assessment_history']
+                query_score = {"industry": industry_name,"username": user_name,
+                                        "assessment_name": assessment_name, "skill": skill}
+                update_query = {"$set":{
                                             "end_time": end_time,
                                             "industry_score" : total_score,
-                                            "grade" : grade
+                                            "grade" : grade,
+                                            "nespl_assessment_submited": "yes" if total_questions_asked == questions_per_level else "No",
+                                            "assessmentResponseType": assessmentResponseType
                         }}
                         
                        
-                        score_save_table.update_one(query_score,update_query)
-                        response_data = {'message': f"Thank you for your precious time {user_name}!! We will get back to you soon. "}
-                        return JsonResponse(response_data)
-                     
+                score_save_table.update_one(query_score,update_query)
+                
+                if total_questions_asked == questions_per_level:
+                    response_data = {'message': f"Your assessment has been successfully completed."}
+                    return JsonResponse(response_data)
+
         
             else:
                 return HttpResponse("Please select the correct options ")     # print("Invalid input. Please enter a number between 1 and 4.\n")
@@ -1141,17 +1182,18 @@ def industry_get_answer(request,industry_name,user_name,assessment_name,user_ans
     else :
          difficulty = "Easy"   
     
-    asked_questions_list = (collection_traking.find_one({"industry_name": industry_name,"user_name":user_name,"assessment_name":assessment_name})).get("question_list")
-    correct_answers_for_loop = (collection_traking.find_one({"industry_name": industry_name,"user_name":user_name,"assessment_name":assessment_name})).get("correct_answers_for_loop")
-    total_questions_asked = (collection_traking.find_one({"industry_name": industry_name,"user_name":user_name,"assessment_name":assessment_name})).get("total_questions_asked")
-    total_score = (collection_traking.find_one({"industry_name": industry_name,"user_name":user_name,"assessment_name":assessment_name})).get("total_score")   
+    asked_questions_list = (collection_traking.find_one({"industry": industry_name,"user_name":user_name,"assessment_name":assessment_name,"skill": skill})).get("question_list")
+    correct_answers_for_loop = (collection_traking.find_one({"industry": industry_name,"user_name":user_name,"assessment_name":assessment_name,"skill": skill})).get("correct_answers_for_loop")
+    total_questions_asked = (collection_traking.find_one({"industry": industry_name,"user_name":user_name,"assessment_name":assessment_name,"skill": skill})).get("total_questions_asked")
+    total_score = (collection_traking.find_one({"industry": industry_name,"user_name":user_name,"assessment_name":assessment_name,"skill": skill})).get("total_score")   
 
     db = get_mongo_connection()
-    collection_question = db["industry_questionans"]
+    collection_question = db["industry_assessment"]
     query = {
                         "difficulty": difficulty,
-                        "assessment": assessment_name,
-                        "industry_name": industry_name,
+                        "assessmentName": assessment_name,
+                        "industry": industry_name,
+                        "skill":skill,
                         "qno":{"$nin": asked_questions_list}
                     }
         # document = collection_question.find_one(query)
@@ -1168,18 +1210,18 @@ def industry_get_answer(request,industry_name,user_name,assessment_name,user_ans
     total_questions_asked = total_questions_asked + 1
     response_data = {
                         'message': f"Question {total_questions_asked}:",
-                        # 'difficulty': difficulty,
+                        'difficulty': difficulty,
                         'qid': serial_no,
                         'question_data': current_question['que'],
                         'options': [current_question[f'option{i}'] for i in range(1, 5)]
                     }
     
-    existing_document = collection_traking.find_one({"industry_name": industry_name,"user_name": user_name, "assessment_name": assessment_name})
+    existing_document = collection_traking.find_one({"industry": industry_name,"user_name": user_name, "assessment_name": assessment_name,"skill": skill})
     
     start_time = start_exam()
     if existing_document:
         collection_traking.update(
-                                {"industry_name": industry_name,"user_name": user_name, "assessment_name": assessment_name},
+                                {"industry": industry_name,"user_name": user_name, "assessment_name": assessment_name,"skill": skill},
                                 {
                                     "$push": {
                                       
@@ -1197,7 +1239,8 @@ def industry_get_answer(request,industry_name,user_name,assessment_name,user_ans
                                 "_id": ObjectId(),
                                 "user_name": user_name,
                                 "assessment_name": assessment_name,
-                                "industry_name": industry_name,
+                                "industry": industry_name,
+                                "skill": skill, 
                                 "start_time": start_time,
                                 "total_score": total_score,
                                 "correct_answers_for_loop": correct_answers_for_loop,
